@@ -1,0 +1,41 @@
+import assert from 'node:assert/strict';
+import {writeFileSync} from 'node:fs';
+const base='http://localhost:3000';
+async function request(path,method='GET',input,token,expected=200){const response=await fetch(base+path,{method,headers:{...(input?{'content-type':'application/json'}:{}),...(token?{authorization:'Bearer '+token}:{})},body:input?JSON.stringify(input):undefined});const data=await response.json();assert.equal(response.status,expected,JSON.stringify(data));return data;}
+const credentials=await request('/api/circles','POST',{title:'Test supervision meeting',names:['Rui','Minhao','Alex','Taylor','Jordan'],timezone:'Europe/London'},undefined,201);
+const path='/api/circles/'+credentials.id;
+await request(path,'GET',undefined,undefined,401);
+await request(path,'GET',undefined,'a'.repeat(64),403);
+let s=await request(path,'GET',undefined,credentials.admin);
+const d=new Date();d.setUTCMonth(d.getUTCMonth()+1,1);const month=d.toISOString().slice(0,7);
+const deadlineDate=new Date(Date.now()+3*86400000).toISOString().slice(0,10)+'T17:00';
+s=await request(path,'PATCH',{type:'createPoll',month,deadline:deadlineDate},credentials.admin);
+let p=s.circle.polls[0];
+assert.equal((await request(path,'GET',undefined,credentials.share)).circle.polls.length,0,'Draft leaked to participants');
+const slots=[];while(slots.length<6){if(d.getUTCDay()>0&&d.getUTCDay()<6)slots.push({date:d.toISOString().slice(0,10),time:slots.length%2?'14:00':'10:00'});d.setUTCDate(d.getUTCDate()+1);}
+s=await request(path,'PATCH',{type:'addSlots',pollId:p.id,slots},credentials.admin);
+p=s.circle.polls[0];
+s=await request(path,'PATCH',{type:'publish',pollId:p.id},credentials.admin);
+await request(path,'PATCH',{type:'removeSlot',pollId:p.id,slotId:p.slots[0].id},credentials.share,403);
+const members=s.circle.members;
+await Promise.all(members.map((m,i)=>request(path,'PATCH',{type:'votes',pollId:p.id,memberId:m.id,changes:p.slots.map((slot,j)=>({slotId:slot.id,before:null,value:j===0?'available':j===1?(i===0?'available':i===1?'check':i===2?'unavailable':'best'):j===2?'best':i===4?'check':'available'}))},credentials.share)));
+s=await request(path,'GET',undefined,credentials.admin);p=s.circle.polls[0];
+assert.equal(Object.keys(p.slots[0].votes).length,5,'Lost a concurrent reply');
+const before=s.revision;
+s=await request(path,'PATCH',{type:'votes',pollId:p.id,memberId:members[1].id,changes:[{slotId:p.slots[0].id,before:'available',value:'best'}]},credentials.share);
+assert.equal(s.circle.polls[0].slots[0].votes[members[0].id],'available');
+await request(path,'PATCH',{type:'votes',pollId:p.id,memberId:members[1].id,changes:[{slotId:p.slots[0].id,before:'available',value:'unavailable'}]},credentials.share,409);
+await request(path,'PATCH',{type:'finalize',pollId:p.id,slotId:p.slots[0].id,expectedRevision:before},credentials.admin,409);
+s=await request(path,'PATCH',{type:'addSlots',pollId:p.id,memberId:members[1].id,slots:[slots[0],{...slots[0],time:'11:00'}]},credentials.share);
+assert.equal(s.circle.polls[0].slots.length,7);
+assert.equal(s.circle.polls[0].slots.find(x=>x.start===p.slots[0].start).votes[members[1].id],'best');
+const empty=s.circle.polls[0].slots.find(x=>x.time==='11:00');assert.deepEqual(empty.votes,{});
+s=await request(path,'PATCH',{type:'finalize',pollId:p.id,slotId:p.slots[0].id,expectedRevision:s.revision},credentials.admin);
+assert.equal(s.circle.polls[0].status,'selected');
+await request(path,'PATCH',{type:'votes',pollId:p.id,memberId:members[1].id,changes:[{slotId:empty.id,before:null,value:'available'}]},credentials.share,409);
+s=await request(path,'PATCH',{type:'sent',pollId:p.id},credentials.admin);assert.equal(s.circle.polls[0].status,'sent');
+s=await request(path,'PATCH',{type:'reopen',pollId:p.id},credentials.admin);assert.equal(s.circle.polls[0].status,'open');assert.equal(s.circle.polls[0].calendarUpdateNeeded,true);
+const duplicate=await request(path,'PATCH',{type:'addSlots',pollId:p.id,memberId:members[1].id,slots:[slots[0]]},credentials.share);assert.equal(duplicate.circle.polls[0].slots.length,7);
+writeFileSync('../test-state.json',JSON.stringify({base,credentials,snapshot:duplicate,month,slots}));
+console.log('PASS: shared D1 persistence; five concurrent clients; member edit isolation; stale edit protection; draft and admin permissions; duplicate and new candidates; finalisation, Outlook state, and reopening.');
+

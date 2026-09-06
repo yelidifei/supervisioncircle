@@ -53,4 +53,3 @@ pnpm build
 源码保存在本仓库，运行中的网站由 Sites 托管。推送 GitHub 不会自动更新网站；修改后需要重新验证并发布。现有 `.openai/hosting.json` 关联同一个 Sites 项目，维护现有网站时保留它。
 
 本站需要服务端接口和 D1，不能直接作为静态网站上传到 GitHub Pages。域名变化也不会通过修改页面标题或 README 自动发生。详见[部署与网址](docs/部署与网址.md)。
-
