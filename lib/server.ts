@@ -1,4 +1,4 @@
-import {database} from '@/db';
+import {database,isReadOnly} from '@/db';
 import {Problem,insist,cleanSetup,applyOperation,type Circle,type Snapshot} from './domain';
 type Row={id:string;admin_hash:string;share_hash:string;payload:string;revision:number};
 const headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'};
@@ -7,6 +7,7 @@ export async function body(req:Request){insist(!req.headers.get('origin')||new U
 export async function digest(token:string){const data=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));return Array.from(new Uint8Array(data),n=>n.toString(16).padStart(2,'0')).join('');}
 function secret(){return Array.from(crypto.getRandomValues(new Uint8Array(32)),n=>n.toString(16).padStart(2,'0')).join('');}
 export async function createCircle(input:unknown){
+ insist(!isReadOnly(),'This site is read-only. Use the new Supervision Circle link provided by the organiser.',503);
  const x=cleanSetup(input),id=crypto.randomUUID(),admin=secret(),share=await digest('share:'+admin),members=x.names.map((name:string)=>({id:crypto.randomUUID(),name}));
  const circle:Circle={title:x.title,timezone:x.timezone,members,organiserId:members[0].id,polls:[]};
  await database().prepare('INSERT INTO circles (id,admin_hash,share_hash,payload,revision,created_at) VALUES (?,?,?,?,0,?)').bind(id,await digest(admin),await digest(share),JSON.stringify(circle),new Date().toISOString()).run();
@@ -24,6 +25,7 @@ function snapshot(row:Row,role:'admin'|'participant'):Snapshot{
 }
 export async function readCircle(id:string,req:Request){const {row,role}=await getRow(id,req);return snapshot(row,role);}
 export async function mutateCircle(id:string,req:Request,input:unknown){
+ insist(!isReadOnly(),'This site is read-only. Use the new Supervision Circle link provided by the organiser.',503);
  for(let attempt=0;attempt<8;attempt++){
   const {row,role}=await getRow(id,req);const next=applyOperation(JSON.parse(row.payload),input,role,row.revision);
   const payload=JSON.stringify(next);insist(payload.length<4000000,'This circle has reached its storage limit.');
