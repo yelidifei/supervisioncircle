@@ -2,7 +2,9 @@
 
 五人月度导师会议排期工具。每月收集真实时间偏好，由组织者选定时间，再手动更新 Outlook。
 
-React / TypeScript · Sites · Cloudflare D1 · 英文界面 · 手机可用
+React / TypeScript · Cloudflare Workers + D1 · 英文界面 · 手机可用
+
+网站主页：<https://supervisioncircle.lidifei-ye.workers.dev>。已有小组请使用管理页复制的完整共享链接，不要重新创建小组。
 
 - [使用说明（中文）](docs/使用说明.md)：创建月份、邀请导师、补充回复、选定时间、更新 Outlook。
 - [修改与维护（中文）](docs/修改与维护.md)：本地运行、代码位置、测试、修改后如何上线。
@@ -50,6 +52,8 @@ pnpm build
 
 ## 上线说明
 
-源码保存在本仓库，运行中的网站由 Sites 托管。推送 GitHub 不会自动更新网站；修改后需要重新验证并发布。现有 `.openai/hosting.json` 关联同一个 Sites 项目，维护现有网站时保留它。
+源码保存在本仓库，当前生产网站由 Cloudflare Workers 托管。现有小组已迁移至 Cloudflare D1；原 Sites 网站为只读存档。`.openai/hosting.json` 保留旧项目关联，**不要把旧 Sites 项目当作当前生产入口，也不要重新开启旧站写入**。
+
+推送 GitHub 不会自动更新网站。修改后完成检查，再运行 `pnpm deploy:cloudflare`；它会先以 Cloudflare 模式构建，再部署到当前 Worker。第一次在新电脑部署前，需要登录 Cloudflare 并配置本地 `wrangler.cloudflare.json`，详见部署指南。
 
 本站需要服务端接口和 D1，不能直接作为静态网站上传到 GitHub Pages。域名变化也不会通过修改页面标题或 README 自动发生。详见[部署与网址](docs/部署与网址.md)。
