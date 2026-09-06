@@ -30,6 +30,8 @@ yarn-error.log*
 .env*
 .dev.vars*
 test-state.json
+wrangler.cloudflare.json
+/backups/
 
 # deployment and generated files
 .vercel
