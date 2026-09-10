@@ -30,12 +30,47 @@ s=await request(path,'PATCH',{type:'addSlots',pollId:p.id,memberId:members[1].id
 assert.equal(s.circle.polls[0].slots.length,7);
 assert.equal(s.circle.polls[0].slots.find(x=>x.start===p.slots[0].start).votes[members[1].id],'best');
 const empty=s.circle.polls[0].slots.find(x=>x.time==='11:00');assert.deepEqual(empty.votes,{});
+// A details save and a participant reply must both survive a D1 revision race.
+const baseline=structuredClone(s.circle.polls[0]);
+await Promise.all([
+ request(path,'PATCH',{type:'updatePollDetails',pollId:p.id,changes:{title:'Updated monthly title',notes:'Discuss the draft.\nBring questions.'}},credentials.admin),
+ request(path,'PATCH',{type:'votes',pollId:p.id,memberId:members[2].id,changes:[{slotId:empty.id,before:null,value:'check'}]},credentials.share)
+]);
+s=await request(path,'GET',undefined,credentials.share);
+assert.equal(s.circle.polls[0].title,'Updated monthly title');
+assert.equal(s.circle.polls[0].slots.find(x=>x.id===empty.id).votes[members[2].id],'check');
+assert.equal(s.circle.polls[0].deadline,baseline.deadline);
+for(const slot of baseline.slots)for(const [member,value] of Object.entries(slot.votes))assert.equal(s.circle.polls[0].slots.find(x=>x.id===slot.id).votes[member],value);
+const unchanged=structuredClone(s.circle);
+await request(path,'PATCH',{type:'updatePollDetails',pollId:p.id,changes:{title:'Forbidden'}},credentials.share,403);
+await request(path,'PATCH',{type:'updatePollDetails',pollId:p.id,changes:{title:'Do not partially save',notes:'x'.repeat(2001)}},credentials.admin,400);
+await request(path,'PATCH',{type:'deleteDraft',pollId:p.id},credentials.admin,409);
+assert.deepEqual((await request(path,'GET',undefined,credentials.admin)).circle,unchanged);
 s=await request(path,'PATCH',{type:'finalize',pollId:p.id,slotId:p.slots[0].id,expectedRevision:s.revision},credentials.admin);
 assert.equal(s.circle.polls[0].status,'selected');
 await request(path,'PATCH',{type:'votes',pollId:p.id,memberId:members[1].id,changes:[{slotId:empty.id,before:null,value:'available'}]},credentials.share,409);
 s=await request(path,'PATCH',{type:'sent',pollId:p.id},credentials.admin);assert.equal(s.circle.polls[0].status,'sent');
+await request(path,'PATCH',{type:'updatePollDetails',pollId:p.id,changes:{notes:'Locked'}},credentials.admin,409);
+await request(path,'PATCH',{type:'deleteDraft',pollId:p.id},credentials.admin,409);
 s=await request(path,'PATCH',{type:'reopen',pollId:p.id},credentials.admin);assert.equal(s.circle.polls[0].status,'open');assert.equal(s.circle.polls[0].calendarUpdateNeeded,true);
 const duplicate=await request(path,'PATCH',{type:'addSlots',pollId:p.id,memberId:members[1].id,slots:[slots[0]]},credentials.share);assert.equal(duplicate.circle.polls[0].slots.length,7);
-writeFileSync('../test-state.json',JSON.stringify({base,credentials,snapshot:duplicate,month,slots}));
-console.log('PASS: shared D1 persistence; five concurrent clients; member edit isolation; stale edit protection; draft and admin permissions; duplicate and new candidates; finalisation, Outlook state, and reopening.');
-
+const next=new Date(month+'-01T12:00:00Z');next.setUTCMonth(next.getUTCMonth()+1);const futureMonth=next.toISOString().slice(0,7);
+s=await request(path,'PATCH',{type:'createPoll',month:futureMonth,deadline:deadlineDate},credentials.admin);
+const draft=s.circle.polls.find(x=>x.month===futureMonth);
+await request(path,'PATCH',{type:'deleteDraft',pollId:draft.id},credentials.share,403);
+// Publishing after a delete dialog was opened must make that stale delete fail.
+while([0,6].includes(next.getUTCDay()))next.setUTCDate(next.getUTCDate()+1);
+await request(path,'PATCH',{type:'addSlots',pollId:draft.id,slots:[{date:next.toISOString().slice(0,10),time:'10:00'}]},credentials.admin);
+await request(path,'PATCH',{type:'publish',pollId:draft.id},credentials.admin);
+await request(path,'PATCH',{type:'deleteDraft',pollId:draft.id},credentials.admin,409);
+next.setUTCMonth(next.getUTCMonth()+1,1);
+s=await request(path,'PATCH',{type:'createPoll',month:next.toISOString().slice(0,7),deadline:deadlineDate},credentials.admin);
+const disposable=s.circle.polls.find(x=>x.month===next.toISOString().slice(0,7));
+s=await request(path,'PATCH',{type:'deleteDraft',pollId:disposable.id},credentials.admin);
+assert.ok(!s.circle.polls.some(x=>x.id===disposable.id));
+assert.deepEqual(s.circle.polls.find(x=>x.id===p.id),duplicate.circle.polls[0]);
+next.setUTCMonth(next.getUTCMonth()+1,1);
+s=await request(path,'PATCH',{type:'createPoll',month:next.toISOString().slice(0,7),deadline:deadlineDate},credentials.admin);
+assert.equal((await request(path,'GET',undefined,credentials.share)).circle.polls.length,2);
+writeFileSync('../test-state.json',JSON.stringify({base,credentials,snapshot:s,month,slots}));
+console.log('PASS: shared D1 persistence; five concurrent replies; details/reply race; atomic validation; draft-only deletion and publication race; month isolation; permissions; candidate deduplication; Outlook states.');

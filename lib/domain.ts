@@ -3,9 +3,11 @@ export type Choice = typeof RESPONSES[number];
 export const LABELS: Record<Choice,string> = {best:'Best',available:'Available',check:'Need to check',unavailable:'Unavailable'};
 export type Member = {id:string;name:string};
 export type Slot = {id:string;start:string;date:string;time:string;createdBy:string;votes:Record<string,Choice>};
-export type Poll = {id:string;month:string;timezone:string;deadline:string;status:'draft'|'open'|'selected'|'sent';slots:Slot[];selectedId:string|null;createdAt:string;calendarUpdateNeeded:boolean};
+export type Poll = {id:string;month:string;timezone:string;deadline:string;title?:string;notes?:string;status:'draft'|'open'|'selected'|'sent';slots:Slot[];selectedId:string|null;createdAt:string;calendarUpdateNeeded:boolean};
+export type PollDetailsPatch = {title?:string;deadline?:string;notes?:string};
 export type Circle = {title:string;timezone:string;members:Member[];organiserId:string;polls:Poll[]};
 export type Snapshot = {id:string;revision:number;role:'admin'|'participant';circle:Circle};
+export function pollTitle(p:Poll,c:Circle){return p.title??c.title;}
 export class Problem extends Error { status:number; constructor(message:string,status=400){super(message);this.status=status;} }
 export function insist(value:unknown,message:string,status=400):asserts value {if(!value)throw new Problem(message,status);}
 export function validZone(value:unknown):string {
@@ -59,9 +61,23 @@ export function applyOperation(c:Circle,op:any,role:'admin'|'participant',revisi
   insist(!c.polls.some(p=>p.month===op.month),'There is already a poll for this month.',409);
   insist(typeof op.deadline==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(op.deadline),'Set a reply deadline.');
   const [date,time]=op.deadline.split('T'),deadline=toUTC(date,time,c.timezone);insist(Date.parse(deadline)>now,'Set a future reply deadline.');
-  c.polls.push({id:crypto.randomUUID(),month:op.month,timezone:c.timezone,deadline,status:'draft',slots:[],selectedId:null,createdAt:new Date(now).toISOString(),calendarUpdateNeeded:false});return c;
+  c.polls.push({id:crypto.randomUUID(),month:op.month,timezone:c.timezone,deadline,title:c.title,notes:'',status:'draft',slots:[],selectedId:null,createdAt:new Date(now).toISOString(),calendarUpdateNeeded:false});return c;
  }
  const p=c.polls.find(p=>p.id===op.pollId);insist(p,'This poll no longer exists.',404);
+ if(op.type==='deleteDraft'){
+  admin();insist(p.status==='draft','Only an unpublished draft can be deleted.',409);
+  c.polls=c.polls.filter(item=>item.id!==p.id);return c;
+ }
+ if(op.type==='updatePollDetails'){
+  admin();insist(p.status==='open'||p.status==='draft','Reopen the poll before editing its details.',409);
+  const changes=op.changes;insist(changes&&typeof changes==='object'&&!Array.isArray(changes),'Enter the meeting details.');
+  const keys=Object.keys(changes);insist(keys.length>0&&keys.every(key=>['title','deadline','notes'].includes(key)),'Only the title, reply deadline and notes can be edited here.');
+  const patch:PollDetailsPatch={};
+  if('title' in changes){insist(typeof changes.title==='string'&&changes.title.trim().length>0&&changes.title.trim().length<=100,'Meeting name must be 1–100 characters.');patch.title=changes.title.trim();}
+  if('notes' in changes){insist(typeof changes.notes==='string'&&changes.notes.length<=2000,'Notes must be at most 2,000 characters.');patch.notes=changes.notes.trim();}
+  if('deadline' in changes){insist(typeof changes.deadline==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(changes.deadline),'Set a reply deadline.');const [date,time]=changes.deadline.split('T');patch.deadline=toUTC(date,time,p.timezone);insist(Date.parse(patch.deadline)>now,'Set a future reply deadline.');}
+  Object.assign(p,patch);return c;
+ }
  if(op.type==='publish'){admin();insist(p.status==='draft','Only a draft can be opened.');insist(p.slots.length>0,'Add at least one candidate time.');insist(p.slots.every(s=>Date.parse(s.start)>now),'Remove past times before opening the poll.');p.status='open';return c;}
  if(op.type==='deadline'){admin();insist(p.status==='open'||p.status==='draft','Reopen the poll before changing its deadline.');insist(typeof op.deadline==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(op.deadline),'Set a reply deadline.');const [d,t]=op.deadline.split('T');p.deadline=toUTC(d,t,p.timezone);insist(Date.parse(p.deadline)>now,'Set a future reply deadline.');return c;}
  if(op.type==='reopen'){admin();insist(p.status==='selected'||p.status==='sent','This poll is already editable.');p.calendarUpdateNeeded=p.calendarUpdateNeeded||p.status==='sent';p.selectedId=null;p.status='open';return c;}
